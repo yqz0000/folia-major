@@ -47,7 +47,13 @@ jobs:
       - name: Scaffold Capacitor iOS wrapper
         run: |
           npm install --no-save @capacitor/core@^7 @capacitor/cli@^7 @capacitor/ios@^7
-          npx cap init "Folia" "top.izuna.foliamajor" --web-dir dist
+          cat > capacitor.config.json <<'EOF'
+          {
+            "appId": "top.izuna.foliamajor",
+            "appName": "Folia",
+            "webDir": "dist"
+          }
+          EOF
           npx cap add ios
           npx cap sync ios
 
