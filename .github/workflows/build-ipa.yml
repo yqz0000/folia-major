@@ -1,0 +1,83 @@
+# =============================================================
+# Build Folia iOS IPA（chthollyphile/folia-major → iPhone 安装包）
+#
+# 原理：
+#   1. 在 GitHub 的 macOS 云主机（自带 Xcode）上运行
+#   2. 执行 folia-major 的 `npm run build` 产出 Web 静态包 (dist/)
+#   3. 用 Capacitor 把 dist/ 包成一个原生壳 App（WKWebView 加载）
+#   4. 用 xcodebuild 编译出 .app，再打包成未签名 .ipa
+#
+# 触发方式：仓库 Actions 页面 → 本工作流 → Run workflow（手动）
+# 产物：未签名 IPA → 下载后用 Sideloadly / AltStore 用自己的
+#       Apple ID 免费侧载到 iPhone（7 天有效，可续签）
+# =============================================================
+name: Build Folia iOS IPA
+
+on:
+  workflow_dispatch:        # 手动触发
+  push:
+    tags:
+      - "v*"                # 可选：推送 v 标签时自动触发
+
+permissions:
+  contents: read
+
+jobs:
+  build-ipa:
+    name: Build unsigned IPA
+    runs-on: macos-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js (from .nvmrc, Node 24)
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build Folia web bundle
+        run: npm run build
+
+      - name: Scaffold Capacitor iOS wrapper
+        run: |
+          npm install --no-save @capacitor/core@^7 @capacitor/cli@^7 @capacitor/ios@^7
+          npx cap init "Folia" "top.izuna.foliamajor" --web-dir dist
+          npx cap add ios
+          npx cap sync ios
+
+      - name: Tweak Info.plist (display name, background audio)
+        run: |
+          PLIST="ios/App/App/Info.plist"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName Folia" "$PLIST" || \
+            /usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string Folia" "$PLIST"
+          /usr/libexec/PlistBuddy -c "Delete :UIBackgroundModes" "$PLIST" 2>/dev/null || true
+          /usr/libexec/PlistBuddy -c "Add :UIBackgroundModes array" "$PLIST"
+          /usr/libexec/PlistBuddy -c "Add :UIBackgroundModes:0 string audio" "$PLIST"
+
+      - name: Build .app (no code signing)
+        run: |
+          xcodebuild -workspace ios/App/App.xcworkspace \
+            -scheme App \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+
+      - name: Package unsigned IPA
+        run: |
+          mkdir -p Payload
+          cp -R build/Build/Products/Release-iphoneos/App.app Payload/
+          zip -qry "Folia-${{ github.run_number }}.ipa" Payload
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: folia-ipa
+          path: "Folia-*.ipa"
