@@ -8,13 +8,34 @@
 #   4. 用 xcodebuild 编译出 .app，再打包成未签名 .ipa
 #
 # 触发方式：仓库 Actions 页面 → 本工作流 → Run workflow（手动）
-# 产物：未签名 IPA → 下载后用 Sideloadly / AltStore 用自己的
-#       Apple ID 免费侧载到 iPhone（7 天有效，可续签）
+#
+# 可选输入（不填则用仓库默认值）：
+#   NETEASE_API_BASE：网易云 API 地址（VITE_NETEASE_API_BASE），
+#                     默认 http://localhost:3000（手机上不可达，二维码会刷不出来）
+#   QQ_API_BASE：QQ 音乐 API 地址（VITE_QQ_API_BASE），
+#                不填则 QQ 音乐灰色不可用（Web/开发构建必须指向可达的 API 实例）
+#   KUGOU_API_BASE：酷狗 API 地址（VITE_KUGOU_API_BASE），
+#                   不填则酷狗灰色不可用（Web 端留空默认禁用）
+#
+# 产物：未签名 IPA → 下载后用爱思助手用自己的 Apple ID 签名侧载
 # =============================================================
 name: Build Folia iOS IPA
 
 on:
-  workflow_dispatch:        # 手动触发
+  workflow_dispatch:        # 手动触发，可填 API 地址
+    inputs:
+      netease_api_base:
+        description: 网易云 API 地址（VITE_NETEASE_API_BASE），如 https://your-xxx.vercel.app；留空则用仓库默认
+        required: false
+        default: ''
+      qq_api_base:
+        description: QQ 音乐 API 地址（VITE_QQ_API_BASE），如 https://your-xxx.vercel.app；留空则 QQ 灰色
+        required: false
+        default: ''
+      kugou_api_base:
+        description: 酷狗 API 地址（VITE_KUGOU_API_BASE），如 https://your-xxx.vercel.app；留空则酷狗灰色
+        required: false
+        default: ''
   push:
     tags:
       - "v*"                # 可选：推送 v 标签时自动触发
@@ -41,8 +62,18 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Build Folia web bundle
-        run: npm run build
+      - name: Build Folia web bundle (with optional API bases)
+        run: |
+          if [ -n "${{ inputs.netease_api_base }}" ]; then
+            echo "VITE_NETEASE_API_BASE=${{ inputs.netease_api_base }}" >> "$GITHUB_ENV"
+          fi
+          if [ -n "${{ inputs.qq_api_base }}" ]; then
+            echo "VITE_QQ_API_BASE=${{ inputs.qq_api_base }}" >> "$GITHUB_ENV"
+          fi
+          if [ -n "${{ inputs.kugou_api_base }}" ]; then
+            echo "VITE_KUGOU_API_BASE=${{ inputs.kugou_api_base }}" >> "$GITHUB_ENV"
+          fi
+          npm run build
 
       - name: Scaffold Capacitor iOS wrapper
         run: |
@@ -57,7 +88,7 @@ jobs:
           npx cap add ios
           npx cap sync ios
 
-      - name: Tweak Info.plist (display name, background audio)
+      - name: Tweak Info.plist (display name, background audio, allow HTTP APIs)
         run: |
           PLIST="ios/App/App/Info.plist"
           /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName Folia" "$PLIST" || \
@@ -65,6 +96,10 @@ jobs:
           /usr/libexec/PlistBuddy -c "Delete :UIBackgroundModes" "$PLIST" 2>/dev/null || true
           /usr/libexec/PlistBuddy -c "Add :UIBackgroundModes array" "$PLIST"
           /usr/libexec/PlistBuddy -c "Add :UIBackgroundModes:0 string audio" "$PLIST"
+          # 允许访问 http:// 的 API 地址（如局域网内自建的 API 服务）
+          /usr/libexec/PlistBuddy -c "Delete :NSAppTransportSecurity" "$PLIST" 2>/dev/null || true
+          /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity dict" "$PLIST"
+          /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity:NSAllowsArbitraryLoads bool true" "$PLIST"
 
       - name: Build .app (no code signing)
         run: |
